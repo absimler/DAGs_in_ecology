@@ -9,7 +9,7 @@ library(jsonlite)
 
 
 # Put your email here for verification from CrossRef (i.e., you are not a bot)
-email <- "allisonsimlerwil@boisestate.edu"
+email <- "youremail@org.org"
 yrs <- 2021:2025 ## Query these years
 
 # "journal-article" counts research articles only (incl. perspectives, corrections)
