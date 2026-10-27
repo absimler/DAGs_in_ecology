@@ -1,0 +1,238 @@
+---
+title: "Simulations to support concepts in main text:
+Myth 6. DAGs are not useful for predictive modeling"
+author: "allisonsimlerwil@boisestate.edu"
+date: "Modified: October 2026"
+output:
+  html_document:
+    fig_caption: true
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+**Purpose:** This script provides data simulations to reinforce concepts described in Myth 6. DAGs are not useful for predictive modeling.
+
+Adapted from teaching materials by A. Simler-Williamson.
+
+```{r libraries}
+library(tidyverse)
+library(broom)
+library(patchwork)
+```
+
+## Simulation 1) "Predictive models aren't for causal inference".
+
+The following simulation illustrates why predictive criteria (e.g., AIC, or other information criteria) should not be used for causal inference. 
+
+The loop below simulates a dataset (100 times) in which a treatment influences the outcome; however a confounding variable, Z, affects both the treatment and the outcome. When the model conditions on the confounder, Z, as specified by a DAG, the treatment effect is estimated accurately on average, and when Z is omitted, the treatment effect is biased (Figure 1A). 
+
+However, both models perform nearly identically in terms of Akaike Information Criterion (AIC; Figure 1B). Depending on model selection procedure, this would typically result in selection of the simpler model, in which Z is omitted and the treatment effect is confounded. This phenomenon is particularly likely to occur where Z is highly correlated with the treatment, resulting in the treatment and Z capturing similar variation in Y. This risk is particularly important in workflows that: a) require arbitrary minimum improvements in model predictive performance (e.g., AIC improvements of >2, which are scarce in this simulation) in order to retain covariates, b) prioritize model sparsity with penalties for model complexity, or c) drop model covariates on the basis of collinearity.
+
+
+```{r sim1}
+
+## Simulation 1: Predictive models aren't for causal inference:
+
+### Generate vectors to store simulation results:
+ate_naive  <- c() # ATE when omitting the confounder entirely
+ate_DAG <- c() # ATE when conditioning on the confounder
+pred_naive  <- c() # AICs for each model
+pred_DAG <- c() 
+rmse_naive  <- c() # Out of sample RMSE for each model
+rmse_DAG <- c() 
+
+## Also need to store the other model coefficients for out of sample prediction below.
+int_naive <- c()
+int_DAG <- c()
+Z_DAG <- c()
+
+# Function for root mean squared error to evaluate predictive accuracy:
+rmse <- function(actual, predicted, na.rm = TRUE) {
+  sqrt(mean((actual - predicted)^2, na.rm = na.rm))
+}
+
+
+set.seed(1234)
+for (i in 1:100) {  ## For i in 100 simulations of a study
+      N <- 60 # sample size
+      Z <- runif(N, min=-5, max=5) # simulated confounder, Z
+      treatment <- rnorm(N, mean=2*Z, sd=1) # the treatment is not random; it is influenced by Z; further, Z and X are highly correlated.
+      
+      ## This is the deterministic portion of our generative model:
+      # the confounder has an effect on the response
+      mu <- Z + 5*treatment  ## TRUE effect of treatment = 5
+      # Simulate outcome using normal distribution:
+      outcome <- rnorm(N, mu, sd=5)  
+      df <- data.frame(Z, treatment, outcome) ## Make it into a dataframe
+      df_train <- df[1:30,]
+      df_test <- df[31:60,] ## split into test and train sets
+      
+      # Fit model that includes v. omits confounder
+      naivemodel <- lm(outcome~treatment, data=df_train)
+      DAGmodel <- lm(outcome~treatment + Z, data=df_train)
+      
+      int_naive[i] <- coef(naivemodel)["(Intercept)"]
+      int_DAG[i] <- coef(DAGmodel)["(Intercept)"]
+      ate_naive[i] <- coef(naivemodel)["treatment"]
+      ate_DAG[i] <- coef(DAGmodel)["treatment"]
+      Z_DAG[i] <- coef(DAGmodel)["Z"]
+      
+      pred_naive[i] <- AIC(naivemodel)
+      pred_DAG[i] <- AIC(DAGmodel)
+      
+      OOS_pred_naive <- predict(naivemodel, newdata=df_test)
+      OOS_pred_DAG <- predict(DAGmodel, newdata=df_test)
+      
+      rmse_naive[i] <- rmse(df_test$outcome, OOS_pred_naive)
+      rmse_DAG[i] <- rmse(df_test$outcome, OOS_pred_DAG)
+
+}
+
+```
+
+```{r fig-1a, fig.width=12, fig.height=6, echo = FALSE, message = FALSE, warning = FALSE}
+
+
+## Plot average treatment effect:
+results <- data.frame(ate_naive, ate_DAG)
+results <- results %>% 
+  pivot_longer(cols=ate_naive:ate_DAG, names_to = "modelspec", values_to = "ate")
+
+ATEplot <- 
+  ggplot(results, aes(ate, fill=modelspec)) + 
+  geom_density( alpha=0.3) + # density plot for our estimates of ATE
+  geom_vline(xintercept=5, # plot a line for the true effect
+             linetype="dashed", color="#c94402", size=1) +
+  annotate("text", x = 4, y = 1.2, label = "True ATE = 5", color = "orangered3") +
+  scale_fill_manual(values=c("cadetblue", "darkorchid4"),
+                    name="Covariate set", labels=c("Model includes confounder",
+                                                   "Model omits confounder"))+
+  theme_bw()+
+  xlab("Estimates of Treatment Effect\n(100 simulated datasets)")
+
+## COmpare AIC between model forms:
+AICresults <- data.frame(pred_naive, pred_DAG)
+AICresults  <- AICresults  %>% 
+  pivot_longer(cols=pred_naive:pred_DAG, names_to = "modelspec", values_to = "AIC")
+
+AICplot <- 
+  ggplot(AICresults, aes(AIC, fill=modelspec)) + 
+  geom_density( alpha=0.3) + # density plot for AICs from fitted models
+  theme_bw()+
+  scale_fill_manual(values=c("cadetblue", "darkorchid4"),
+                    name="Covariate set", labels=c("Model includes confounder",
+                                                   "Model omits confounder"))+
+  xlab("AIC scores from models\n(100 simulated datasets)")
+
+
+## Calculate root mean squared error for prediction within this simulation:
+RMSEresults <- data.frame(rmse_naive,rmse_DAG)
+RMSEresults  <- RMSEresults  %>% 
+  pivot_longer(cols=rmse_naive:rmse_DAG, names_to = "modelspec", values_to = "RMSE")
+
+RMSEplot <- 
+  ggplot(RMSEresults, aes(RMSE, fill=modelspec)) + 
+  geom_density( alpha=0.3) + # density plot for AICs from fitted models
+  theme_bw()+
+  scale_fill_manual(values=c("cadetblue", "darkorchid4"),
+                    name="Covariate set", labels=c("Model includes confounder",
+                                                   "Model omits confounder"))+
+  ggtitle("Confounding pathway is the same\nbetween training and test data")+
+  xlab("RMSE for out-of-sample predictions\n(100 simulated datasets)") +
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+
+
+ATEplot + AICplot +  
+  plot_layout(nrow=1, ncol=2)+
+  plot_annotation(tag_levels = 'A')+
+  plot_layout(guides = "collect")& 
+  theme(legend.position = "bottom")
+
+
+```
+
+*__Figure 1.__ Comparison of results for causal inference (Panel A) and prediction-focused goals (Panel B) from the analysis of 100 simulated datasets, in which the treatment and outcome are impacted by a confounder, Z. Though the average treatment effect is biased when the confounder, Z, is omitted (Panel A), the predictive performance of two models, one conditioning on the confounder and the other omitting it, is similar, which would often lead to the selection of the "simpler" model covariate set in predictive workflows. Note that the model that includes the confounder recovers the treatment effect without bias, but the wider distribution of estimated values reflects the strong collinearity between Z and the treatment covariate, which reduces precision greatly.*
+
+
+## Simulation 2) DAGs can advance predictive modeling goals by improving transportability of treatment effects out of sample
+
+This second simulation illustrates how consideration of confounding factors, using DAGs, can advance predictive modeling goals. 
+
+In the first simulation, we calculate the fitted model's predictive performance (using root mean squared error) on a "test" dataset that has been generated by the same simulation procedure as the training data. Thus, in simulation 1, the "test" and "training" datasets share the same underlying data generating process and the same relationships between treatment, the confounder Z, and the outcome. When the fitted model is used to predict into this same data generating process, it will perform well; however, if it is used to predict into a new data generating process, in which the treatment effect is the same, but the confounding backdoor path (X<-Z->Y) differs, then out of sample prediction will decline for the "naive" model compared to a model that conditions on the confounder Z, as illustrated in Figure 2.
+
+This phenomenon has been discussed using different statistical language in the prediction literature. Dependency structures between a test and training dataset (e.g., a shared omitted confounder that impacts each similarly, due to spatial, phylogenetic, or other grouping structures) can cause "information leakage" between test and training sets. This leakage can cause out of sample prediction to be artificially inflated when models are evaluated using test data that share these same dependency structures (Figure 2A), compared to testing fitted models on independent datasets, where dependency structures differ (Figure 2B). "Blocking" strategies in predictive workflows (Roberts et al. 2017) often aim to sever these dependency structures to more accurately estimate out of sample prediction. This strategy is based on similar logic to the examples illustrated here, but the relationship to DAGs is not commonly discussed in the ecological statistical literature.
+
+In Simulation 2, we compare the predictive performance of models that either omit or condition upon Z, when tested on "new" data where the confounding pathway is shared or differs.
+
+
+```{r sim2}
+
+## Simulation 2: Does "omitted confounder" model predict well into new sample, where "true" treatment effect is the same, but confounding relationships differ?
+
+for (i in 1:100) {  ## For i in 100 simulations of a study
+  ## Now, we generate a new "out of sample" dataset, in which the treatment effect is the same as above, but the confounding pathways differ in strength.
+  
+  N <- 30 # sample size
+  Z <- runif(N, min=-5, max=5) # simulated confounder, Z
+  treatment <- rnorm(N, mean=0, sd=1) # in the TEST data, no relationship between Z and treatment
+  
+  ## The confounder still has an effect on the treatment, but the backdoor path has been removed by changing the link between treatment and Z above...
+  mu <- Z + 5*treatment  ## TRUE effect of treatment = 5 and stays the same.
+  # Simulate outcome using normal distribution:
+  outcome <- rnorm(N, mu, sd=5)  
+  new_test <- data.frame(Z, treatment, outcome) ## Make it into a dataframe
+  
+  ## Evaluate prediction of "old" models into new space where confounding differs, but mechanism of interest is stable:
+  
+  # Confounder omitted:
+  prediction_naive <- mean(int_naive) + mean(ate_naive)*new_test$treatment 
+  # Confounder controlled for:
+  prediction_DAG <- mean(int_DAG) + mean(ate_DAG)*new_test$treatment + mean(Z_DAG)*new_test$Z
+  
+  # Calculate RMSE for each:
+  rmse_naive[i] <- rmse(new_test$outcome, prediction_naive)
+  rmse_DAG[i] <- rmse(new_test$outcome, prediction_DAG)
+}
+
+
+```
+
+```{r fig-2, fig.width=12, fig.height=5, echo = FALSE, message = FALSE, warning = FALSE}
+
+
+## Plot the predictive performance using RMSE:
+
+RMSEresults <- data.frame(rmse_naive, rmse_DAG)
+RMSEresults  <- RMSEresults  %>% 
+  pivot_longer(cols=rmse_naive:rmse_DAG, names_to = "modelspec", values_to = "RMSE")
+
+RMSEplot2 <- 
+  ggplot(RMSEresults, aes(RMSE, fill=modelspec)) + 
+  geom_density( alpha=0.3) + # density plot for AICs from fitted models
+  theme_bw()+
+  scale_fill_manual(values=c("cadetblue", "darkorchid4"),
+                    name="Covariate set", labels=c("Model includes confounder",
+                                                   "Model omits confounder"))+
+  ggtitle("Confounding pathway differs\nbetween training and test data")+
+  xlab("RMSE for out-of-sample predictions\n(100 simulated datasets)") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+
+
+RMSEplot + RMSEplot2 + 
+  plot_layout(nrow=1, ncol=2)+ 
+  plot_annotation(tag_levels = 'A')+
+  plot_layout(guides = "collect")& 
+  theme(legend.position = "bottom")
+
+```
+*__Figure 2.__ A comparison of predictive performance of two models (one that conditions on a confounder, Z, and the other which omits it) in two "out-of-sample" prediction scenarios. Panel A illustrates that the predictive performance of these two models is similar (on the basis of root mean squared error (RMSE)) when the models are evaluated using "test" data drawn from the same data generating process as the training dataset. Panel B illustrates that the model that conditions on the confounder outperfroms the model that omits the confounder, if the "test" data is drawn from a new data generating process, in which the treatment effect is the same, but the confounding backdoor path changes.*
+
+
+**Literature Cited**
+Roberts, D. R., Bahn, V., Ciuti, S., Boyce, M. S., Elith, J., Guillera-Arroita, G., Hauenstein, S., Lahoz-Monfort, J. J., Schröder, B., Thuiller, W., Warton, D. I., Wintle, B. A., Hartig, F., & Dormann, C. F. (2017). Cross-validation strategies for data with temporal, spatial, hierarchical, or phylogenetic structure. Ecography, 40(8), 913–929. https://doi.org/10.1111/ecog.02881

@@ -1,0 +1,180 @@
+---
+title: "Simulations to support concepts in main text - Myth 5: DAGs are not useful
+  in randomized experiments"
+author: "allisonsimlerwil@boisestate.edu"
+date: 'Modified: October 2026'
+output:
+  html_document:
+    fig_caption: true
+    toc: true
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+**Purpose:** This script provides data simulations to reinforce concepts described in Myth 5: DAGs are not useful in randomized experiments.
+
+Adapted from teaching materials by A. Simler-Williamson.
+
+```{r libraries}
+library(tidyverse)
+library(broom)
+library(patchwork)
+```
+
+# Simulation 1a: Small sample sizes, chance imbalance in drivers of the outcome, and randomization "failure" in controlled experiments
+
+Randomization removes confounding in expectation in controlled experiments, however, especially at small sample sizes, chance imbalance in covariates can emerge, generating statistical bias.
+
+The loop below simulates an experiment (100 times) with the following scenario: We are studying the effects of bison on soil carbon, using a fencing exclosure treatment to manipulate bison occurrence. Fence treatments are deployed randomly. Precipitation also influences soil carbon. In expectation, randomization of the treatment should remove any possible confounding from precipitation (precipitation does not impact the treatment, so that arrow can be removed from our DAG); however, at small sample sizes, we can still see chance imbalance in precipitation that causes bias in our estimated treatment effect.
+
+```{r sim1a}
+# Make some vectors to store our simulation results
+ate_random_naive <- c() # ATE = average treatment effect from each simulated experiment
+ate_random_DAG  <- c() # ATE when controlling for accidental imbalance emerging at small samples
+imbalance <- c() # We will also store info about chance imbalance in precip between treatments.
+
+
+set.seed(1234)
+for (i in 1:100) {  ## For i in 100 simulations of the experiment above
+  N <- 12 # Set sample size to 10 observations (plots)
+
+  # Sample size is divided among our 2 treatment levels (1=fenced; 0=unfenced)
+  fenced <- rep(c(0,1), N/2)
+
+  # precipitation varies from 1cm to 5cm in our study area.
+  # (runinf() generates random draws from the uniform distribution).
+  precip <- runif(N, min=1, max=5)
+
+  # Now, generate the outcome, based on our generative model:
+  ## Fencing exclosures influence soil carbon with a "true" effect of -5 (removing bison reduces carbon)
+  ## Precipitation increases soil carbon with a "true" effect of 10
+  ## HOWEVER, there is no relationship between bison and precip at this time IN EXPECTATION
+
+  ## This is the deterministic portion of our generative model: B0 + B1*X1 + B2*X2
+  mu <- 10 + 10*precip - 5*fenced
+  ## this is the sd for our normal distribution
+  sigma <- 2
+  ## This simulates carbon (the outcome) using the normal probability distribution
+  carbon <- rnorm(N, mu, sigma)
+  random.design <- data.frame(precip, fenced, carbon) ## Make it into a dataframe
+
+  # Fit model that ignores precipitation. Just condition on the bison fencing treatment:
+  naivemodel <- lm(carbon~fenced, data=random.design)
+  DAGmodel <- lm(carbon~fenced + precip, data=random.design)
+
+  # Extract estimates for treatment effect & p-vals
+  ate_random_naive[i] <- coef(naivemodel)["fenced"]
+  ate_random_DAG[i] <- coef(DAGmodel)["fenced"]
+  imbalance[i] <- cor(random.design$precip, random.design$fenced)
+}
+```
+
+```{r fig-1a, fig.width=12, fig.height=9, echo = FALSE, message = FALSE, warning = FALSE}
+## Plot the treatment effect:
+ATEplot <- tibble(ate = ate_random_naive) %>%
+  ggplot(., aes(ate)) +
+  annotate("text", x = -5, y = 0.01, label = "Expected ATE = -5", color = "#c94402") +
+  geom_density(fill="darkorchid4", alpha=0.5) + # density plot for our estimates of ATE
+  geom_vline(xintercept=-5, # plot a line for the true effect
+             linetype="dashed", color="#c94402", size=1) +
+  theme_bw()+
+  xlab("Estimates of Treatment Effect\nresulting from 100x simulated randomized experiments")
+
+
+imbalanceplot <- tibble(chance_imbal = imbalance) %>%
+  ggplot(., aes(chance_imbal)) +
+  geom_density(fill="cadetblue", alpha=0.5) + # density plot for observed correlations between treatment and precip
+  annotate("text", x = 0, y = 0.1, label = "Expected corr = 0", color = "grey30") +
+  geom_vline(xintercept=0, # plot a line for expected correlation between treatment and precip
+             linetype="dashed", color="grey60", size=1) +
+  theme_bw()+
+  ylab("density") +
+  xlab("Correlation between treatment and precipitation (chance imbalance)\nresulting from 100x simulated randomized experiments")
+
+
+imbal_and_bias <-tibble(chance_imbal = imbalance, ate = ate_random_naive) %>%
+  ggplot(., aes(x=chance_imbal, y=ate_random_naive-(-5))) +
+  geom_point(color="cadetblue4") +
+  geom_hline(yintercept = 0, linetype="dashed", color="orangered3") +
+  geom_vline(xintercept = 0, linetype="dashed", color="grey60") +
+  annotate("text", x = 0.5, y = 2, label = "Expected bias = 0", color = "orangered3") +
+  annotate("text", x = 0.1, y = -10, label = "Expected corr = 0", color = "grey30") +
+  theme_bw()+
+  xlab("Correlation between treatment and precipitation (chance imbalance)\nresulting from 100x simulated randomized experiments") +
+  ylab("Extent of statistical bias in ATE")+
+  ggtitle("Model assumes randomization effective\n(does not condition on precipitation)")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+imbal_unbias <-tibble(chance_imbal = imbalance, ate = ate_random_DAG) %>%
+  ggplot(., aes(x=chance_imbal, y=ate_random_DAG-(-5))) +
+  geom_point(color="cadetblue4") +
+  geom_hline(yintercept = 0, linetype="dashed", color="orangered3") +
+  geom_vline(xintercept = 0, linetype="dashed", color="grey60") +
+  annotate("text", x = 0.5, y = 2, label = "Expected bias = 0", color = "orangered3") +
+  annotate("text", x = 0.1, y = -10, label = "Expected corr = 0", color = "grey20") +
+  ylim(-22, 22) +
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5)) +
+  xlab("Correlation between treatment and precipitation (chance imbalance)\nresulting from 100x simulated randomized experiments") + ylab("Extent of statistical bias in ATE") +
+  ggtitle("Model conditions on precipitation")
+
+
+ATEplot + imbalanceplot +
+  (imbal_and_bias) + (imbal_unbias) +
+  plot_layout(ncol = 2, nrow=2) + plot_annotation(tag_levels = 'A')
+```
+
+*__Figure 1.__ Results from 100 simulated experiments at a sample size of 10 plots. Panel A illustrates how in a randomized experiment with a sample size of 10, the design recovers the "true" treatment effect (-5) on average; however, individual experiments result in estimated treatment effects ranging from <-20 to >10, demonstrating a significant range in unintended bias in the treatment effect. Panels B and C illustrate how this unintended statistical bias (assumed to be handled via the use of a randomized treatment) emerges due to chance imbalance in the value of precipitation between treatment groups, resulting in possible strong correlations (as strong as ~-0.5 or +0.5) between treatment and precipitation. If precipitation is not conditioned upon in the resulting statistical model (i.e., the model assumes randomization was effective), then the extent of statistical bias in the experimental results scales with the extent of the chance imbalance in precipitation across treatment groups (Panel C). Panel D illustrates that considering sources of "accidental" bias in a DAG, resulting on the development of a model that conditions upon precipitation, can reduce the threat of statistical bias, removing the trend between "chance imbalance" in covariates and the extent of bias in the ATE. Remaining deviations from the "true" treatment effect are caused by random sampling error.*
+
+# Simulation 1b: How does the risk of chance imbalance change with sample size?
+
+Repeat the same experiment (same generative model as above) 100x at each of several sample sizes.
+
+```{r sim1b}
+sample_sizes <- c(6, 10, 20, 50, 100, 250, 500, 1000)
+
+sim_by_N <- map_dfr(sample_sizes, function(N) {
+  map_dfr(1:100, function(i) {
+    fenced <- rep(c(0,1), N/2)
+    precip <- runif(N, min=1, max=5)
+    carbon <- rnorm(N, 10 + 10*precip - 5*fenced, 2)
+    tibble(N = N,
+           imbalance = cor(precip, fenced),
+           naive = coef(lm(carbon ~ fenced))["fenced"],
+           DAG   = coef(lm(carbon ~ fenced + precip))["fenced"])
+  })
+})
+```
+
+```{r fig-1b, fig.width=9, fig.height=8, echo = FALSE, message = FALSE, warning = FALSE}
+## Panel A: chance imbalance in precipitation shrinks toward 0 as N grows
+imbal_by_N <- ggplot(sim_by_N, aes(x = factor(N), y = abs(imbalance))) +
+  geom_hline(yintercept = 0, linetype="dashed", color="grey60") +
+  geom_boxplot(fill="cadetblue", alpha=0.5, outlier.size=0.8) +
+  theme_bw() +
+  xlab("Sample size (plots)") +
+  ylab("abs(Correlation) between treatment\nand precipitation (chance imbalance)")
+
+## Panel B: bias in the ATE estimate, for the naive vs. DAG-informed model
+bias_by_N <- sim_by_N %>%
+  pivot_longer(c(naive, DAG), names_to = "model", values_to = "ate") %>%
+  mutate(model = recode(model,
+                        naive = "Does not condition on precipitation",
+                        DAG   = "Conditions on precipitation")) %>%
+  ggplot(aes(x = factor(N), y = abs(ate - (-5)), fill = model)) +
+  geom_hline(yintercept = 0, linetype="dashed", color="orangered3") +
+  geom_boxplot(alpha=0.5, outlier.size=0.8) +
+  scale_fill_manual(values = c("cadetblue4", "darkorchid4")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  xlab("Sample size (plots)") +
+  ylab("abs(Extent of statistical bias in ATE)")
+
+imbal_by_N / bias_by_N + plot_annotation(tag_levels = 'A')
+```
+
+*__Figure 2.__ Results of simulated experiments (100 iterations) at varying sample sizes, from n=6 to n=1000. Panel A demonstrates how the risk of chance imbalance in precipitation between treatment groups (expressed as the absolute value of the correlation between precipitation and treatment ID) decreases as sample size increases. Panel B demonstrates that, as chance imbalance decreases with increasing sample size, so does the threat of statistical bias (expressed as the absolute value of the difference between the estimated ATE and the "true" treatment effect). Conditioning on precipitation addresses the statistical bias associated with chance imbalance in precipitation, and remaining deviations from the "true" treatment effect are caused by random sampling error.*

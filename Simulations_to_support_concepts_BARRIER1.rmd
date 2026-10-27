@@ -1,0 +1,174 @@
+---
+title: "Simulations to support concepts in main text - Barrier 1: Causal DAGs are not statistical models and do not specify a statistical approach"
+author: "allisonsimlerwil@boisestate.edu"
+date: "Modified: October 2026"
+output:
+  html_document:
+    fig_caption: true
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+**Purpose:** This script provides data simulations to reinforce concepts described in Barrier 1: Causal DAGs are not statistical models and do not specify a statistical approach.
+
+Adapted from teaching materials by A. Simler-Williamson.
+
+```{r libraries}
+library(tidyverse)
+library(broom)
+library(patchwork)
+```
+
+## Simulation 1) Statistical specification choices may introduce sources of bias that DAGs cannot capture: Nonlinearity 
+
+The following scenario illustrates how conditioning on a linear term for a confounding variable may fail to control for all statistical bias associated with that confounder if the nature of its confounding relationship is nonlinear. Here, we express this as a quadratic relationship with the treatment.
+
+
+The loop below simulates a dataset (100 times) in which a treatment influences the outcome (true effect = 1); however a confounding variable, Z, has a nonlinear effect on both the treatment and the outcome, simulated as a quadratic relationship. Though DAGs capture confounding paths, they do not distinguish between statistical forms, including nonlinear relationships. Below, we compare the estimated treatment effect when the resulting statistical model conditions on the linear term for Z only, or the quadratic term for Z.
+
+```{r sim1}
+
+# Make vectors to store our simulation results
+ate_linear <- c() # ATE = average treatment effect when conditioning on linear confounder only.
+ate_quad  <- c() # ATE when conditioning on additional quadratic term
+ate_naive  <- c() # ATE when omitting the confounder entirely
+
+
+set.seed(1234)
+for (i in 1:100) {  ## For i in 100 simulations of a study
+  N <- 100 # sample size
+  Z <- runif(N, min=-1, max=1) # simulated confounder, Z
+  treatment <- rbinom(prob=plogis(Z + 2*(Z^2)), size=1, n=N) # the probability of receiving treatment is not random; it is influenced by nonlinear effect of Z (Z + 2*z^2)
+  ## This is the deterministic portion of our generative model
+  # the confounder has a quadratic effect on the response
+  mu <- 10 + 1*Z + 2*(Z^2) + 1*treatment  ## TRUE effect of treatment = 1
+  # Simulate outcome using normal distribution:
+  outcome <- rnorm(N, mu, sd=2)  
+  df <- data.frame(Z, treatment, outcome) ## Make it into a dataframe
+  
+  # Fit model that includes linear term only, compared to model with quadratic term.
+  linearmodel <- lm(outcome~treatment + Z, data=df)
+  quadraticmodel <- lm(outcome~treatment + Z + I(Z^2), data=df)
+  naivemodel <- lm(outcome~treatment, data=df)
+  
+  # Extract estimates for treatment effect 
+  ate_linear[i] <- coef(linearmodel)["treatment"]
+  ate_quad[i] <- coef(quadraticmodel)["treatment"]
+  ate_naive[i] <- coef(naivemodel)["treatment"]
+}
+
+```
+
+```{r fig-1a, fig.width=8, fig.height=8, echo = FALSE, message = FALSE, warning = FALSE}
+
+## Plot the treatment effect:
+results <- data.frame(ate_linear = ate_linear, ate_quad = ate_quad, ate_naive = ate_naive)
+results <- results %>% 
+  pivot_longer(cols=ate_linear:ate_naive, names_to = "modelspec", values_to = "ate")
+
+ATEplot <- 
+  ggplot(results, aes(ate, fill=modelspec)) + 
+  geom_density( alpha=0.4) + # density plot for our estimates of ATE
+  geom_vline(xintercept=1, # plot a line for the true effect
+             linetype="dashed", color="#c94402", size=1) +
+  scale_fill_manual(values=c("cadetblue3", "grey80", "darkorchid4"), 
+                    labels=c("Linear specification", "Confounder omitted",
+                             "Quadratic specification"),
+                    name=c("Model specification\nfor confounder"))+
+  annotate("text", x = 0.5, y = 0.75, label = "True ATE = 1", color = "orangered3") +
+  theme_bw()+
+  xlab("Estimates of Treatment Effect\nresulting from 100x simulated analyses")
+
+ATEplot
+
+```
+
+*__Figure 1.__ Results from the analysis of 100 simulated datasets in which the relationship between treatment and outcome is impacted by a confounder, Z, which has a quadratic effect on both treatment and outcome. Models that condition on the linear specification of Z control for some, but not all of the statistical bias associated with the backdoor path (X <- Z -> Y). Models that conditioned on a quadratic specification (Z + Z^2) of the confounding pathway accurately estimate the treatment effect.*
+
+
+## Simulation 2) Statistical specification choices may introduce sources of bias that DAGs cannot capture: Probability distributions 
+
+The following scenario illustrates how statistical bias can emerge from choice of probability distribution in a statistical model. Here, we examine an outcome variable that is a positive integer, generated using the poisson distribution. We analyse this data using ordinary least squares linear regression, even though the response variable violates several assumptions of using a gaussian/normal distribution and linear regression (e.g., linear relationship with the response, normally distributed errors, nonzero probability of values of the response that are less than 0 and continuous, rather than discrete). This statistical choice, in the absense of other confounding relationships, can still cause statistical bias in the estimated treatment effect, compared to using a distribution that reflects the true data generating process (e.g. the poisson distribution, the true data-generating process). These sources of bias associated with model functional form, rather than causal relationships between covariates in the system, are not captured by DAGs.
+
+```{r sim2}
+# Make vectors to store our simulation results
+ate_normal <- c() # ATE = average treatment effect when applying linear regression with gaussian/normal distribution
+ate_poisson  <- c() # ATE when using glm with poisson distribution, reflecting data generating process
+
+
+trueate <- 1## TRUE effect of treatment
+
+set.seed(1234)
+for (i in 1:100) {  ## For i in 100 simulations of a study
+  N <- 100 # sample size
+  ## NO CONFOUNDERS in this scenario. Bias comes only from distributional choices.
+  treatment <- runif(N, min=0, max=3)  # treatment variable
+  ## This is the deterministic portion of our generative model
+  lambda <- 1 + trueate*treatment  
+  # Simulate outcome using poisson distribution:
+  outcome <- rpois(N,exp(lambda))  
+  df <- data.frame(Z, treatment, outcome) ## Make it into a dataframe
+  
+  # Fit model that includes linear term only, compared to model with quadratic term.
+  normalmodel <- lm(outcome~treatment, data=df)
+  poissonmodel <- glm(outcome~treatment, data=df, family=poisson(link="log"))
+  
+  # Extract estimates for treatment effect
+  ## Need to log transform normal estimate to compare to log-scale poisson estimate:
+  ate_normal[i] <- log(coef(normalmodel)["treatment"])
+  ate_poisson[i] <- coef(poissonmodel)["treatment"]
+}
+
+```
+
+```{r fig-2, fig.width=7, fig.height=9, echo = FALSE, message = FALSE, warning = FALSE}
+
+
+## Plot the treatment effect:
+results2 <- data.frame(ate_normal = ate_normal, ate_poisson = ate_poisson)
+results2 <- results2 %>% 
+  pivot_longer(cols=ate_normal:ate_poisson, names_to = "modelspec", values_to = "ate")
+
+ATEplot2 <- 
+  ggplot(results2, aes(ate, fill=modelspec)) + 
+  geom_density( alpha=0.3) + # density plot for our estimates of ATE
+  geom_vline(xintercept=trueate, # plot a line for the true effect
+             linetype="dashed", color="#c94402", size=1) +
+  scale_fill_manual(values=c("cadetblue4", "darkorchid4"), 
+                    labels=c("Normal/Gaussian Errors",
+                             "Poisson Errors"),
+                    name=c("Model specification\nfor probability distribution"))+
+  annotate("text", x = trueate+0.3, y = 5, label = "True ATE = 1", color = "orangered3") +
+  theme_bw()+
+  xlab("Estimates of Treatment Effect\nresulting from 100x simulated analyses")
+
+
+
+
+modelfit <- ggplot(df, aes(x=treatment, y=outcome)) +
+  geom_point(color="grey40", alpha=0.4) +
+  # Linear Model (OLS) Fit
+  geom_smooth(method = "lm", 
+              aes(color = "Linear Model (LM)"), 
+              se = FALSE, 
+              linewidth = 1.2) +
+  
+  # Poisson GLM Fit (Log Link)
+  geom_smooth(method = "glm", 
+              method.args = list(family = "poisson"), 
+              aes(color = "Poisson GLM"), 
+              se = FALSE, 
+              linewidth = 1.2) +
+  labs(x = "Treatment",
+       y = "Outcome\n(Count variable)",
+       color = "Model Type") +
+  scale_color_manual(values = c("Linear Model (LM)" = "cadetblue4", "Poisson GLM" = "darkorchid4")) +
+  theme_bw()
+
+ATEplot2 / modelfit + plot_annotation(tag_levels = 'A')
+
+```
+*__Figure 2.__ Results from the analysis of 100 simulated datasets in which the outcome variable is generated using the poisson probability distribution. Applying linear regression (which predicts nonzero probabilities of values of the response < 0, as well as nonzero probabilities of continuous values of the response) results in statistical bias (Panel A), compared to using a probability distribution that reflects the true data-generating process (e.g., Poisson) Note that there are no confounding relationships in this dataset, and statistical bias is generated by choice of model's functional form alone, as illustrated by Panel B.*
